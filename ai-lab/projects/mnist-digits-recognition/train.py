@@ -81,6 +81,8 @@ def train_loop(model, device, train_loader, val_loader, optimizer, epochs=10, pa
     train_accuracies, val_accuracies = [], []
     lrs = []
 
+    scaler = torch.cuda.amp.GradScaler() if device.type == "cuda" else None  # AMP scaler
+
     for epoch in range(1, epochs + 1):
         model.train()
         running_loss = 0
@@ -89,10 +91,23 @@ def train_loop(model, device, train_loader, val_loader, optimizer, epochs=10, pa
         for batch_idx, (data, target) in enumerate(train_loader):
             data, target = data.to(device), target.to(device)
             optimizer.zero_grad()
-            output = model(data)
-            loss = criterion(output, target)
-            loss.backward()
-            optimizer.step()
+            if scaler is not None:
+                with torch.cuda.amp.autocast():
+                    output = model(data)
+                    loss = criterion(output, target)
+                scaler.scale(loss).backward()
+                # Gradient Clipping
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                output = model(data)
+                loss = criterion(output, target)
+                loss.backward()
+                # Gradient Clipping
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                optimizer.step()
             running_loss += loss.item() * data.size(0)
             pred = output.argmax(dim=1, keepdim=True)
             correct += pred.eq(target.view_as(pred)).sum().item()
