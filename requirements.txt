@@ -3,3 +3,8 @@ torchvision
 torchaudio
 matplotlib
 jupyterlab
+scikit-learn
+onnx
+onnxruntime
+flask
+tensorboard
