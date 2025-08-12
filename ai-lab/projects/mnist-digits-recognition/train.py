@@ -3,6 +3,10 @@ import torch.nn as nn
 import torch.optim as optim
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader, random_split
+import matplotlib.pyplot as plt
+from torch.utils.tensorboard import SummaryWriter
+from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
+import numpy as np
 
 # Burada çok basit bir sinir ağı (CNN) modeli tanımlıyoruz.
 # CNN, resimlerdeki özellikleri otomatik olarak bulabilen bir yapay zeka modelidir.
@@ -53,6 +57,8 @@ def validate(model, device, val_loader, criterion):
     model.eval()
     val_loss = 0
     correct = 0
+    all_preds = []
+    all_targets = []
     with torch.no_grad():
         for data, target in val_loader:
             data, target = data.to(device), target.to(device)
@@ -60,17 +66,26 @@ def validate(model, device, val_loader, criterion):
             val_loss += criterion(output, target).item() * data.size(0)
             pred = output.argmax(dim=1, keepdim=True)
             correct += pred.eq(target.view_as(pred)).sum().item()
+            all_preds.extend(pred.cpu().numpy())
+            all_targets.extend(target.cpu().numpy())
     val_loss /= len(val_loader.dataset)
     accuracy = correct / len(val_loader.dataset)
-    return val_loss, accuracy
+    return val_loss, accuracy, np.array(all_preds).flatten(), np.array(all_targets).flatten()
 
-def train_loop(model, device, train_loader, val_loader, optimizer, epochs=10, patience=3, scheduler=None):
+def train_loop(model, device, train_loader, val_loader, optimizer, epochs=10, patience=3, scheduler=None, writer=None):
     criterion = nn.NLLLoss()
     best_loss = float('inf')
     patience_counter = 0
 
+    train_losses, val_losses = [], []
+    train_accuracies, val_accuracies = [], []
+    lrs = []
+
     for epoch in range(1, epochs + 1):
         model.train()
+        running_loss = 0
+        correct = 0
+        total = 0
         for batch_idx, (data, target) in enumerate(train_loader):
             data, target = data.to(device), target.to(device)
             optimizer.zero_grad()
@@ -78,14 +93,32 @@ def train_loop(model, device, train_loader, val_loader, optimizer, epochs=10, pa
             loss = criterion(output, target)
             loss.backward()
             optimizer.step()
+            running_loss += loss.item() * data.size(0)
+            pred = output.argmax(dim=1, keepdim=True)
+            correct += pred.eq(target.view_as(pred)).sum().item()
+            total += data.size(0)
             if batch_idx % 100 == 0:
                 print(f"Epoch {epoch} [{batch_idx * len(data)}/{len(train_loader.dataset)}] Loss: {loss.item():.6f}")
 
-        val_loss, val_acc = validate(model, device, val_loader, criterion)
-        print(f"Epoch {epoch}: Validation loss: {val_loss:.4f}, accuracy: {val_acc:.4f}")
+        train_loss = running_loss / len(train_loader.dataset)
+        train_acc = correct / total
+        val_loss, val_acc, _, _ = validate(model, device, val_loader, criterion)
+        print(f"Epoch {epoch}: Train loss: {train_loss:.4f}, acc: {train_acc:.4f} | Validation loss: {val_loss:.4f}, accuracy: {val_acc:.4f}")
+
+        train_losses.append(train_loss)
+        val_losses.append(val_loss)
+        train_accuracies.append(train_acc)
+        val_accuracies.append(val_acc)
+        lrs.append(optimizer.param_groups[0]['lr'])
+
+        if writer:
+            writer.add_scalar('Loss/train', train_loss, epoch)
+            writer.add_scalar('Loss/val', val_loss, epoch)
+            writer.add_scalar('Accuracy/train', train_acc, epoch)
+            writer.add_scalar('Accuracy/val', val_acc, epoch)
+            writer.add_scalar('LearningRate', optimizer.param_groups[0]['lr'], epoch)
 
         if scheduler is not None:
-            # ReduceLROnPlateau için val_loss, StepLR için epoch sonrası step
             if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
                 scheduler.step(val_loss)
             else:
@@ -102,8 +135,31 @@ def train_loop(model, device, train_loader, val_loader, optimizer, epochs=10, pa
                 print("Early stopping tetiklendi.")
                 break
 
-    # En iyi ağırlıkları yükle
     model.load_state_dict(torch.load('best_model.pth'))
+    return train_losses, val_losses, train_accuracies, val_accuracies, lrs
+
+def plot_metrics(train_losses, val_losses, train_accuracies, val_accuracies):
+    epochs = range(1, len(train_losses) + 1)
+    plt.figure(figsize=(12,5))
+    plt.subplot(1,2,1)
+    plt.plot(epochs, train_losses, label='Train Loss')
+    plt.plot(epochs, val_losses, label='Validation Loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.legend()
+    plt.title('Loss')
+
+    plt.subplot(1,2,2)
+    plt.plot(epochs, train_accuracies, label='Train Accuracy')
+    plt.plot(epochs, val_accuracies, label='Validation Accuracy')
+    plt.xlabel('Epoch')
+    plt.ylabel('Accuracy')
+    plt.legend()
+    plt.title('Accuracy')
+
+    plt.tight_layout()
+    plt.savefig('training_metrics.png')
+    plt.show()
 
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -129,16 +185,30 @@ def main():
 
     model = SimpleCNN().to(device)
     optimizer = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9, weight_decay=1e-4)
-
-    # StepLR örneği:
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=2, gamma=0.5)
-    # Alternatif: ReduceLROnPlateau kullanmak isterseniz aşağıdaki satırı kullanabilirsiniz:
-    # scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=1, verbose=True)
 
-    train_loop(model, device, train_loader, val_loader, optimizer, epochs=5, patience=3, scheduler=scheduler)
+    writer = SummaryWriter(log_dir='runs/mnist_experiment')
+
+    train_losses, val_losses, train_accuracies, val_accuracies, lrs = train_loop(
+        model, device, train_loader, val_loader, optimizer, epochs=5, patience=3, scheduler=scheduler, writer=writer
+    )
 
     torch.save(model.state_dict(), 'mnist_cnn.pth')
     print("Model kaydedildi: mnist_cnn.pth")
+
+    # Son epoch için confusion matrix
+    criterion = nn.NLLLoss()
+    _, _, preds, targets = validate(model, device, val_loader, criterion)
+    cm = confusion_matrix(targets, preds)
+    disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=list(range(10)))
+    disp.plot(cmap=plt.cm.Blues)
+    plt.title("Confusion Matrix")
+    plt.savefig('confusion_matrix.png')
+    plt.show()
+
+    plot_metrics(train_losses, val_losses, train_accuracies, val_accuracies)
+
+    writer.close()
 
 if __name__ == '__main__':
     main()
