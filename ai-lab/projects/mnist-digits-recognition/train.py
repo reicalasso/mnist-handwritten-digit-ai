@@ -2,8 +2,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torchvision import datasets, transforms
-from torch.utils.data import DataLoader
-from tensorflow.keras.callbacks import EarlyStopping
+from torch.utils.data import DataLoader, random_split
 
 # Burada çok basit bir sinir ağı (CNN) modeli tanımlıyoruz.
 # CNN, resimlerdeki özellikleri otomatik olarak bulabilen bir yapay zeka modelidir.
@@ -39,93 +38,91 @@ class SimpleCNN(nn.Module):
         output = torch.log_softmax(x, dim=1)  # Sonuçları olasılığa çevir (logaritmik olarak)
         return output
 
-# Bu fonksiyon modeli eğitir. Yani modele verileri gösterip doğruyu öğrenmesini sağlar.
-def train(model, device, train_loader, optimizer, epoch):
-    model.train()  # Modeli eğitim moduna al
-    criterion = nn.NLLLoss()  # Kayıp fonksiyonu: Tahmin ile gerçek arasındaki farkı ölçer
-    for batch_idx, (data, target) in enumerate(train_loader):
-        # data: Resimler, target: Doğru rakamlar
-        data, target = data.to(device), target.to(device)  # Veriyi cihaza (CPU/GPU) gönder
+def validate(model, device, val_loader, criterion):
+    model.eval()
+    val_loss = 0
+    correct = 0
+    with torch.no_grad():
+        for data, target in val_loader:
+            data, target = data.to(device), target.to(device)
+            output = model(data)
+            val_loss += criterion(output, target).item() * data.size(0)
+            pred = output.argmax(dim=1, keepdim=True)
+            correct += pred.eq(target.view_as(pred)).sum().item()
+    val_loss /= len(val_loader.dataset)
+    accuracy = correct / len(val_loader.dataset)
+    return val_loss, accuracy
 
-        optimizer.zero_grad()  # Önceki gradyanları sıfırla
-        output = model(data)  # Modelden tahmin al
-        loss = criterion(output, target)  # Tahmin ile gerçek arasındaki farkı hesapla
-        loss.backward()  # Geri yayılım: Hataları geriye doğru dağıt
-        optimizer.step()  # Modelin ağırlıklarını güncelle
-
-        # Her 100 adımda bir ekrana kayıp değerini yazdır
-        if batch_idx % 100 == 0:
-            print(f'Epoch: {epoch} [{batch_idx * len(data)}/{len(train_loader.dataset)}] Loss: {loss.item():.6f}')
-
-# Erken durdurma için fonksiyon
-def early_stop(model, device, train_loader, optimizer, epoch, patience=3):
-    # Eğitim sırasında kaybın iyileşmediği epoch'ları izler
-    # Eğer belirli bir sabır (patience) sayısı kadar epoch boyunca iyileşme olmazsa, eğitimi durdurur
-    model.eval()  # Modeli değerlendirme moduna al
+def train_loop(model, device, train_loader, val_loader, optimizer, epochs=10, patience=3):
     criterion = nn.NLLLoss()
-    # İlk kaybı hesapla
-    data, target = next(iter(train_loader))
-    data, target = data.to(device), target.to(device)
-    output = model(data)
-    loss = criterion(output, target)
-    min_loss = loss.item()
-    
-    # Sabır sayısını başlat
-    trigger_times = 0 
+    best_loss = float('inf')
+    patience_counter = 0
 
-    for batch_idx, (data, target) in enumerate(train_loader):
-        data, target = data.to(device), target.to(device)
-        output = model(data)
-        loss = criterion(output, target)
+    for epoch in range(1, epochs + 1):
+        model.train()
+        for batch_idx, (data, target) in enumerate(train_loader):
+            data, target = data.to(device), target.to(device)
+            optimizer.zero_grad()
+            output = model(data)
+            loss = criterion(output, target)
+            loss.backward()
+            optimizer.step()
+            if batch_idx % 100 == 0:
+                print(f"Epoch {epoch} [{batch_idx * len(data)}/{len(train_loader.dataset)}] Loss: {loss.item():.6f}")
 
-        # Eğer kayıp önceki en düşük kayıptan daha düşükse, modeli ve kaybı güncelle
-        if loss.item() < min_loss:
-            min_loss = loss.item()
-            trigger_times = 0 
-            # Modelin ağırlıklarını kaydet
+        val_loss, val_acc = validate(model, device, val_loader, criterion)
+        print(f"Epoch {epoch}: Validation loss: {val_loss:.4f}, accuracy: {val_acc:.4f}")
+
+        if val_loss < best_loss:
+            best_loss = val_loss
             torch.save(model.state_dict(), 'best_model.pth')
-            print(f"Model kaydedildi: best_model.pth (Epoch: {epoch}, Batch: {batch_idx})")
+            print(f"Model kaydedildi. Epoch {epoch}")
+            patience_counter = 0
         else:
-            trigger_times += 1 
+            patience_counter += 1
+            if patience_counter >= patience:
+                print("Early stopping tetiklendi.")
+                break
 
-        # Eğer sabır sayısı aşılırsa, eğitimi durdur
-        if trigger_times >= patience:
-            print(f"Erken durdurma: Kayıp {patience} dönemdir iyileşmiyor.")
-            return True 
-    return False 
+    # En iyi ağırlıkları yükle
+    model.load_state_dict(torch.load('best_model.pth'))
 
 def main():
-    # Cihaz ayarlama: Eğer bilgisayarda ekran kartı (GPU) varsa onu kullan, yoksa işlemci (CPU) kullan
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # MNIST veri setini indir ve uygun şekilde dönüştür
-    # transforms.ToTensor(): Resmi tensöre çevirir (PyTorch'un anlayacağı formata)
-    # transforms.Normalize: Veriyi ortalaması 0, standart sapması 1 olacak şekilde normalleştirir
     transform = transforms.Compose([
-        transforms.RandomRotation(10),  # Resimleri rastgele döndür (10 dereceye kadar)
-        transforms.RandomHorizontalFlip(),  # Resimleri rastgele yatay çevir/MNIST icin biraz tartismali
+        transforms.RandomRotation(10),
+        transforms.RandomHorizontalFlip(),
+        transforms.RandomAffine(degrees=0, translate=(0.1, 0.1), scale=(0.9, 1.1), shear=10), # RandomAffine eklendi
+        # RandomAffine, resimlerin rastgele döndürülmesi, kaydırılması,
+        # ölçeklenmesi ve eğilmesi gibi dönüşümler uygular.
+        # Bu, modelin daha çeşitli verilerle eğitilmesini sağlar.
+        # Bu dönüşümler, modelin daha iyi genelleme yapabilmesini sağlar.
+        # Örneğin, el yazısı rakamların farklı açılarda ve boyutlarda yazılmasını simüle eder.
+        # Bu, modelin daha iyi genelleme yapabilmesini sağlar.
+        # RandomCrop, resimlerin rastgele kesilmesini sağlar.
+        # Bu, modelin daha iyi genelleme yapabilmesini sağlar.
+        # GaussianBlur, resimlerin bulanıklaştırılmasını sağlar.
+        transforms.RandomCrop(28, padding=4), # RandomCrop eklendi
+        transforms.GaussianBlur(kernel_size=(3, 3), sigma=(0.1, 2.0)), # GaussianBlur eklendi
         transforms.ToTensor(),
         transforms.Normalize((0.1307,), (0.3081,))
     ])
     
-    # Eğitim verisini indir ve yükle
-    train_dataset = datasets.MNIST('./data', train=True, download=True, transform=transform)
-    train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)  # 64'lük gruplar halinde karıştırarak yükle
+    # Eğitim ve validation için veri setini böl
+    dataset = datasets.MNIST('./data', train=True, download=True, transform=transform)
+    train_size = int(0.8 * len(dataset))
+    val_size = len(dataset) - train_size
+    train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
 
-    # Modeli oluştur ve cihaza gönder
+    train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=64, shuffle=False)
+
     model = SimpleCNN().to(device)
-    # Adam optimizasyon algoritmasını kullan, öğrenme oranı 0.001
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-4)  # Ağırlıkların aşırı öğrenmesini engellemek için ağırlık çürümesi (weight decay) ekle
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-4)
 
-    # Eğitim döngüsü: Modeli 10 kez (epoch) tüm verilerle eğit
-    epochs = 10  # 10 kere tüm veriyi göster
-    for epoch in range(1, epochs + 1):
-        train(model, device, train_loader, optimizer, epoch)
-        # Erken durdurma kontrolü
-        if early_stop(model, device, train_loader, optimizer, epoch):
-            break 
+    train_loop(model, device, train_loader, val_loader, optimizer, epochs=10, patience=3)
 
-# Modelin ağırlıklarını dosyaya kaydet (sonradan tekrar kullanmak için)
     torch.save(model.state_dict(), 'mnist_cnn.pth')
     print("Model kaydedildi: mnist_cnn.pth")
 
