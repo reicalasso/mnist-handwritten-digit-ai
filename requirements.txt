@@ -8,3 +8,5 @@ onnx
 onnxruntime
 flask
 tensorboard
+numpy
+Pillow
