@@ -232,10 +232,6 @@ venv.bak/
 runs/
 events.out.tfevents.*
 
-# Matplotlib ve diğer çıktı görselleri
-*.png
-*.jpg
-*.jpeg
 
 # VSCode ayarları
 .vscode/
