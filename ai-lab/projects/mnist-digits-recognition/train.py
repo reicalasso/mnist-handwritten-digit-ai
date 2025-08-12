@@ -129,8 +129,10 @@ def main():
     train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=64, shuffle=False)
 
+    # model = SimpleCNN().to(device)
+    # optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-4)
     model = SimpleCNN().to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-4)
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9, weight_decay=1e-4)
 
     train_loop(model, device, train_loader, val_loader, optimizer, epochs=5, patience=3)
 
