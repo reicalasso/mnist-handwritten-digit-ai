@@ -9,33 +9,34 @@ from torch.utils.data import DataLoader, random_split
 class SimpleCNN(nn.Module):
     def __init__(self):
         super(SimpleCNN, self).__init__()
-        # İlk katman: 1 kanallı (gri tonlu) resmi alır, 32 farklı filtre uygular, her filtre 3x3 boyutunda
-        self.conv1 = nn.Conv2d(1, 32, 3, 1) # 1 giriş kanalı, 32 çıkış kanalı, 3x3 filtre, 1 adımda kay
-        # İkinci katman: 32 kanallı çıktıyı alır, 64 filtre uygular
+        self.conv1 = nn.Conv2d(1, 32, 3, 1)
         self.conv2 = nn.Conv2d(32, 64, 3, 1)
-        # Dropout: Aşırı öğrenmeyi engellemek için bazı nöronları rastgele kapatır (0.25 oranında)
+        self.conv3 = nn.Conv2d(64, 128, 3, 1)      # Yeni katman
+        self.conv4 = nn.Conv2d(128, 128, 3, 1)     # Yeni katman
         self.dropout1 = nn.Dropout2d(0.25)
-        # Tam bağlantılı katman: 64 kanallı, 12x12 boyutunda veriyi (toplam 9216 değer) 128 nörona bağlar
-        self.fc1 = nn.Linear(9216, 128)
-        # Dropout: Yine aşırı öğrenmeyi engellemek için (0.5 oranında)
+        # 128 kanal, 4x4 çıktı boyutu (her havuzlamadan sonra boyut yarıya iner, 28->26->24->22->20, 2x2 pooling ile 10->5, padding yoksa 4x4 olabilir)
+        self.fc1 = nn.Linear(128 * 4 * 4, 128)
         self.dropout2 = nn.Dropout(0.5)
-        # Son katman: 128 nörondan 10 çıkış (0'dan 9'a kadar rakamlar için)
         self.fc2 = nn.Linear(128, 10)
 
     def forward(self, x):
-        # İleri besleme işlemi: Veriyi katmanlardan geçiriyoruz
-        x = self.conv1(x)  # İlk konvolüsyon katmanı
-        x = torch.relu(x)  # Aktivasyon fonksiyonu: Negatifleri sıfırlar, pozitifleri bırakır
-        x = self.conv2(x)  # İkinci konvolüsyon katmanı
-        x = torch.relu(x)  # Yine aktivasyon
-        x = torch.max_pool2d(x, 2)  # 2x2 boyutunda havuzlama: Veriyi küçültür, önemli bilgileri tutar
-        x = self.dropout1(x)  # Dropout uygula
-        x = torch.flatten(x, 1)  # Çok boyutlu veriyi tek boyuta indir (batch boyutu hariç)
-        x = self.fc1(x)  # Tam bağlantılı katman
-        x = torch.relu(x)  # Aktivasyon
-        x = self.dropout2(x)  # Dropout uygula
-        x = self.fc2(x)  # Son katman
-        output = torch.log_softmax(x, dim=1)  # Sonuçları olasılığa çevir (logaritmik olarak)
+        x = self.conv1(x)
+        x = torch.relu(x)
+        x = self.conv2(x)
+        x = torch.relu(x)
+        x = torch.max_pool2d(x, 2)
+        x = self.conv3(x)         # Yeni katman
+        x = torch.relu(x)
+        x = self.conv4(x)         # Yeni katman
+        x = torch.relu(x)
+        x = torch.max_pool2d(x, 2)
+        x = self.dropout1(x)
+        x = torch.flatten(x, 1)
+        x = self.fc1(x)
+        x = torch.relu(x)
+        x = self.dropout2(x)
+        x = self.fc2(x)
+        output = torch.log_softmax(x, dim=1)
         return output
 
 def validate(model, device, val_loader, criterion):
