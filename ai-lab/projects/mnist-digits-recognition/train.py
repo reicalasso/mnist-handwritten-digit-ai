@@ -64,7 +64,7 @@ def validate(model, device, val_loader, criterion):
     accuracy = correct / len(val_loader.dataset)
     return val_loss, accuracy
 
-def train_loop(model, device, train_loader, val_loader, optimizer, epochs=10, patience=3):
+def train_loop(model, device, train_loader, val_loader, optimizer, epochs=10, patience=3, scheduler=None):
     criterion = nn.NLLLoss()
     best_loss = float('inf')
     patience_counter = 0
@@ -83,6 +83,13 @@ def train_loop(model, device, train_loader, val_loader, optimizer, epochs=10, pa
 
         val_loss, val_acc = validate(model, device, val_loader, criterion)
         print(f"Epoch {epoch}: Validation loss: {val_loss:.4f}, accuracy: {val_acc:.4f}")
+
+        if scheduler is not None:
+            # ReduceLROnPlateau için val_loss, StepLR için epoch sonrası step
+            if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+                scheduler.step(val_loss)
+            else:
+                scheduler.step()
 
         if val_loss < best_loss:
             best_loss = val_loss
@@ -104,18 +111,9 @@ def main():
     transform = transforms.Compose([
         transforms.RandomRotation(10),
         transforms.RandomHorizontalFlip(),
-        transforms.RandomAffine(degrees=0, translate=(0.1, 0.1), scale=(0.9, 1.1), shear=10), # RandomAffine eklendi
-        # RandomAffine, resimlerin rastgele döndürülmesi, kaydırılması,
-        # ölçeklenmesi ve eğilmesi gibi dönüşümler uygular.
-        # Bu, modelin daha çeşitli verilerle eğitilmesini sağlar.
-        # Bu dönüşümler, modelin daha iyi genelleme yapabilmesini sağlar.
-        # Örneğin, el yazısı rakamların farklı açılarda ve boyutlarda yazılmasını simüle eder.
-        # Bu, modelin daha iyi genelleme yapabilmesini sağlar.
-        # RandomCrop, resimlerin rastgele kesilmesini sağlar.
-        # Bu, modelin daha iyi genelleme yapabilmesini sağlar.
-        # GaussianBlur, resimlerin bulanıklaştırılmasını sağlar.
-        transforms.RandomCrop(28, padding=4), # RandomCrop eklendi
-        transforms.GaussianBlur(kernel_size=(3, 3), sigma=(0.1, 2.0)), # GaussianBlur eklendi
+        transforms.RandomAffine(degrees=0, translate=(0.1, 0.1), scale=(0.9, 1.1), shear=10),
+        transforms.RandomCrop(28, padding=4),
+        transforms.GaussianBlur(kernel_size=(3, 3), sigma=(0.1, 2.0)),
         transforms.ToTensor(),
         transforms.Normalize((0.1307,), (0.3081,))
     ])
@@ -129,12 +127,15 @@ def main():
     train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=64, shuffle=False)
 
-    # model = SimpleCNN().to(device)
-    # optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-4)
     model = SimpleCNN().to(device)
     optimizer = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9, weight_decay=1e-4)
 
-    train_loop(model, device, train_loader, val_loader, optimizer, epochs=5, patience=3)
+    # StepLR örneği:
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=2, gamma=0.5)
+    # Alternatif: ReduceLROnPlateau kullanmak isterseniz aşağıdaki satırı kullanabilirsiniz:
+    # scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=1, verbose=True)
+
+    train_loop(model, device, train_loader, val_loader, optimizer, epochs=5, patience=3, scheduler=scheduler)
 
     torch.save(model.state_dict(), 'mnist_cnn.pth')
     print("Model kaydedildi: mnist_cnn.pth")
