@@ -193,8 +193,10 @@ def main():
         model, device, train_loader, val_loader, optimizer, epochs=5, patience=3, scheduler=scheduler, writer=writer
     )
 
+    # Sadece ağırlıkları değil, tüm modeli kaydet
+    torch.save(model, 'mnist_cnn_fullmodel.pth')
     torch.save(model.state_dict(), 'mnist_cnn.pth')
-    print("Model kaydedildi: mnist_cnn.pth")
+    print("Model ve ağırlıklar kaydedildi: mnist_cnn_fullmodel.pth, mnist_cnn.pth")
 
     # Son epoch için confusion matrix
     criterion = nn.NLLLoss()
@@ -209,6 +211,25 @@ def main():
     plot_metrics(train_losses, val_losses, train_accuracies, val_accuracies)
 
     writer.close()
+
+    # Eğitilmiş modeli yükleyip tek bir resim üzerinde test et
+    loaded_model = torch.load('mnist_cnn_fullmodel.pth', map_location=device)
+    loaded_model.eval()
+
+    # Validation setinden bir örnek al
+    sample_img, sample_label = val_dataset[0]
+    sample_img = sample_img.unsqueeze(0).to(device)
+
+    with torch.no_grad():
+        output = loaded_model(sample_img)
+        pred_label = output.argmax(dim=1, keepdim=True)
+
+    # Sonucu görselleştir
+    plt.figure(figsize=(8,8))
+    plt.imshow(sample_img.cpu().squeeze(0), cmap='gray')
+    plt.title(f"Gerçek Etiket: {sample_label}, Tahmin Edilen Etiket: {pred_label.item()}")
+    plt.axis('off')
+    plt.show()
 
 if __name__ == '__main__':
     main()
