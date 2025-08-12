@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader
+from tensorflow.keras.callbacks import EarlyStopping
 
 # Burada çok basit bir sinir ağı (CNN) modeli tanımlıyoruz.
 # CNN, resimlerdeki özellikleri otomatik olarak bulabilen bir yapay zeka modelidir.
@@ -56,6 +57,43 @@ def train(model, device, train_loader, optimizer, epoch):
         if batch_idx % 100 == 0:
             print(f'Epoch: {epoch} [{batch_idx * len(data)}/{len(train_loader.dataset)}] Loss: {loss.item():.6f}')
 
+# Erken durdurma için fonksiyon
+def early_stop(model, device, train_loader, optimizer, epoch, patience=3):
+    # Eğitim sırasında kaybın iyileşmediği epoch'ları izler
+    # Eğer belirli bir sabır (patience) sayısı kadar epoch boyunca iyileşme olmazsa, eğitimi durdurur
+    model.eval()  # Modeli değerlendirme moduna al
+    criterion = nn.NLLLoss()
+    # İlk kaybı hesapla
+    data, target = next(iter(train_loader))
+    data, target = data.to(device), target.to(device)
+    output = model(data)
+    loss = criterion(output, target)
+    min_loss = loss.item()
+    
+    # Sabır sayısını başlat
+    trigger_times = 0 
+
+    for batch_idx, (data, target) in enumerate(train_loader):
+        data, target = data.to(device), target.to(device)
+        output = model(data)
+        loss = criterion(output, target)
+
+        # Eğer kayıp önceki en düşük kayıptan daha düşükse, modeli ve kaybı güncelle
+        if loss.item() < min_loss:
+            min_loss = loss.item()
+            trigger_times = 0 
+            # Modelin ağırlıklarını kaydet
+            torch.save(model.state_dict(), 'best_model.pth')
+            print(f"Model kaydedildi: best_model.pth (Epoch: {epoch}, Batch: {batch_idx})")
+        else:
+            trigger_times += 1 
+
+        # Eğer sabır sayısı aşılırsa, eğitimi durdur
+        if trigger_times >= patience:
+            print(f"Erken durdurma: Kayıp {patience} dönemdir iyileşmiyor.")
+            return True 
+    return False 
+
 def main():
     # Cihaz ayarlama: Eğer bilgisayarda ekran kartı (GPU) varsa onu kullan, yoksa işlemci (CPU) kullan
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -64,6 +102,8 @@ def main():
     # transforms.ToTensor(): Resmi tensöre çevirir (PyTorch'un anlayacağı formata)
     # transforms.Normalize: Veriyi ortalaması 0, standart sapması 1 olacak şekilde normalleştirir
     transform = transforms.Compose([
+        transforms.RandomRotation(10),  # Resimleri rastgele döndür (10 dereceye kadar)
+        transforms.RandomHorizontalFlip(),  # Resimleri rastgele yatay çevir/MNIST icin biraz tartismali
         transforms.ToTensor(),
         transforms.Normalize((0.1307,), (0.3081,))
     ])
@@ -75,12 +115,15 @@ def main():
     # Modeli oluştur ve cihaza gönder
     model = SimpleCNN().to(device)
     # Adam optimizasyon algoritmasını kullan, öğrenme oranı 0.001
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-4)  # Ağırlıkların aşırı öğrenmesini engellemek için ağırlık çürümesi (weight decay) ekle
 
     # Eğitim döngüsü: Modeli 10 kez (epoch) tüm verilerle eğit
     epochs = 10  # 10 kere tüm veriyi göster
     for epoch in range(1, epochs + 1):
         train(model, device, train_loader, optimizer, epoch)
+        # Erken durdurma kontrolü
+        if early_stop(model, device, train_loader, optimizer, epoch):
+            break 
 
 # Modelin ağırlıklarını dosyaya kaydet (sonradan tekrar kullanmak için)
     torch.save(model.state_dict(), 'mnist_cnn.pth')
