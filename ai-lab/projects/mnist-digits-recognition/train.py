@@ -7,6 +7,9 @@ import matplotlib.pyplot as plt
 from torch.utils.tensorboard import SummaryWriter
 from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
 import numpy as np
+import onnx
+import onnxruntime as ort
+from flask import Flask, request, jsonify
 
 # Burada çok basit bir sinir ağı (CNN) modeli tanımlıyoruz.
 # CNN, resimlerdeki özellikleri otomatik olarak bulabilen bir yapay zeka modelidir.
@@ -245,6 +248,52 @@ def main():
     plt.title(f"Gerçek Etiket: {sample_label}, Tahmin Edilen Etiket: {pred_label.item()}")
     plt.axis('off')
     plt.show()
+
+    # TorchScript export
+    example_input = torch.randn(1, 1, 28, 28).to(device)
+    traced_script_module = torch.jit.trace(model, example_input)
+    traced_script_module.save("mnist_cnn_script.pt")
+    print("TorchScript model kaydedildi: mnist_cnn_script.pt")
+
+    # ONNX export
+    torch.onnx.export(
+        model, 
+        example_input, 
+        "mnist_cnn.onnx", 
+        input_names=["input"], 
+        output_names=["output"], 
+        dynamic_axes={"input": {0: "batch_size"}, "output": {0: "batch_size"}},
+        opset_version=12
+    )
+    print("ONNX model kaydedildi: mnist_cnn.onnx")
+
+    # ONNX Runtime ile test
+    ort_session = ort.InferenceSession("mnist_cnn.onnx")
+    # NumPy array'e çevir
+    img_numpy = sample_img.cpu().numpy()
+    ort_inputs = {"input": img_numpy}
+    ort_outs = ort_session.run(None, ort_inputs)
+    ort_pred = np.argmax(ort_outs[0], axis=1)[0]
+    print(f"ONNX Runtime tahmini: {ort_pred}, Gerçek: {sample_label}")
+
+    # Flask API
+    app = Flask(__name__)
+
+    @app.route('/predict', methods=['POST'])
+    def predict():
+        # JSON ile gelen veriyi al
+        data = request.get_json()
+        img = np.array(data['image']).astype(np.float32)
+        # (1, 28, 28) bekleniyor, batch dimension ekle
+        img = img.reshape(1, 1, 28, 28)
+        ort_inputs = {"input": img}
+        ort_outs = ort_session.run(None, ort_inputs)
+        pred = int(np.argmax(ort_outs[0], axis=1)[0])
+        return jsonify({'prediction': pred})
+
+    print("Flask API başlatmak için: flask run --host=0.0.0.0 --port=5000")
+    # Not: Flask başlatmak için aşağıdaki satırı açabilirsin:
+    # app.run(host="0.0.0.0", port=5000)
 
 if __name__ == '__main__':
     main()
